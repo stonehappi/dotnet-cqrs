@@ -124,9 +124,22 @@ This separation ensures clear responsibility for each layer and makes the codeba
 
 ### Run Locally
 
+> **Environment Variables:**  
+> The code uses environment variables for configuration, such as:
+> - `DB_CONNECTION` (PostgreSQL connection string)
+> - `TIME_FORMAT` (for time serialization)
+> - `DATETIME_FORMAT` (for datetime serialization)
+> - `TZ` (timezone, e.g., `Asia/Phnom_Penh`)
+>
+> You can set these in your shell before running, or use a `.env` file with your preferred values.  
+> If not set, the code uses sensible defaults.
+
 ```bash
 git clone https://github.com/stonehappi/dotnet-cqrs.git
 cd dotnet-cqrs/DotnetCqrs
+# Example: set environment variables (optional)
+export DB_CONNECTION="Server=localhost:5432;Database=cqrs;User Id=postgres;Password=password;"
+export TZ="Asia/Phnom_Penh"
 dotnet run
 ```
 
@@ -138,21 +151,230 @@ docker compose up --build
 
 Visit Swagger UI: `http://localhost:8081/swagger`
 
+### Docker and Docker Compose Explained
+
+**Dockerfile:**  
+- Multi-stage build for efficient, small runtime images.
+- Uses .NET 9 SDK to build and publish the app, then runs it on the .NET 9 ASP.NET runtime.
+- Exposes ports 8080 and 8081 (the app listens on 8080 by default).
+- Uses `USER $APP_UID` if set, for running as a non-root user.
+
+**compose.yaml:**  
+- Defines a `dotnetcqrs` service that builds the image using the Dockerfile.
+- Maps host port 8081 to container port 8080 (`"8081:8080"`).
+- Sets environment variables:
+  - `TZ` (timezone, e.g., `America/Los_Angeles`)
+  - `DB_CONNECTION` (PostgreSQL connection string)
+- Connects to an external Docker network named `docker_postgres` (make sure this exists and your PostgreSQL is accessible there).
+
+**Customizing:**  
+- Change `TZ` or `DB_CONNECTION` in `compose.yaml` to match your environment.
+- If you want to use a different port, adjust the `ports` mapping.
+- If you want to run as a specific user, set `APP_UID` in your compose or Docker run command.
+
+**Usage:**  
+- To build and run with Docker Compose:  
+  ```bash
+  docker compose up --build
+  ```
+- The app will be available at [http://localhost:8081/swagger](http://localhost:8081/swagger).
+
 ---
 
 ## 💬 Example: Getting All Users
 
 ```csharp
+// Controller action
 [HttpGet]
 public async Task<IActionResult> GetAll()
 {
-    var users = await getAllUsersHandler.HandleAsync(new GetAllUsersQuery());
+    // Step 1: Create the query object
+    var query = new GetAllUsersQuery();
+
+    // Step 2: Call the handler with the query
+    var users = await getAllUsersHandler.HandleAsync(query);
+
+    // Step 3: Return the result
     return Ok(users);
 }
 ```
 
 - Controller receives the HTTP request and calls the handler.
-- Handler queries the repository and returns the result.
+- The handler processes the query and returns the user list.
+
+**Handler Implementation:**
+
+```csharp
+// filepath: DotnetCqrs/Features/Users/Handlers/Gets.cs
+public class GetAllUsersHandler(IUsersRepository repo) : IGetAllUsersHandler
+{
+    public async Task<IEnumerable<UsersEntity>> HandleAsync(GetAllUsersQuery query)
+    {
+        var users = await repo.GetAll()
+            .ToListAsync();
+        return users;
+    }
+}
+```
+
+**Repository Method:**
+
+```csharp
+// filepath: DotnetCqrs/Infrastructure/Data/Repository.cs
+public virtual IQueryable<T> GetAll()
+{
+    return _dbSet;
+}
+```
+
+---
+
+## 💬 Example: Getting a User by Id
+
+```csharp
+// Controller action
+[HttpGet("{id:int}")]
+public async Task<IActionResult> GetById(int id)
+{
+    // Step 1: Create the query object
+    var query = new GetUserByIdQuery(id);
+
+    // Step 2: Call the handler with the query
+    var user = await getHandler.HandleAsync(query);
+
+    // Step 3: Return the result
+    return Ok(user);
+}
+```
+
+**Handler Implementation:**
+
+```csharp
+// filepath: DotnetCqrs/Features/Users/Handlers/Get.cs
+public class GetUserByIdHandler(IUsersRepository repo) : IGetUserByIdHandler
+{
+    public async Task<UsersEntity> HandleAsync(GetUserByIdQuery query)
+    {
+        var user = await repo.GetSingleAsync(e => e.Id == query.Id);
+        if (user == null) throw new NotFoundEx();
+        return user;
+    }
+}
+```
+
+---
+
+## 💬 Example: Creating a User
+
+```csharp
+// Controller action
+[HttpPost]
+public async Task<IActionResult> Create([FromBody] CreateUserRequest request)
+{
+    // Step 1: Create the command object
+    var command = new CreateUserCommand(request.Username, request.Email, request.StartDate, request.StartTime);
+
+    // Step 2: Call the handler with the command
+    await createHandler.HandleAsync(command);
+
+    // Step 3: Return the result
+    return NoContent();
+}
+```
+
+**Handler Implementation:**
+
+```csharp
+// filepath: DotnetCqrs/Features/Users/Handlers/Create.cs
+public class CreateUserHandler(IUsersRepository repo) : ICreateUserHandler
+{
+    public async Task HandleAsync(CreateUserCommand command)
+    {
+        var user = new UsersEntity
+        {
+            Username = command.Username,
+            Email = command.Email,
+            StartDate = command.StartDate,
+            StartTime = command.StartTime
+        };
+        await repo.AddAsync(user);
+        await repo.CommitAsync();
+    }
+}
+```
+
+---
+
+## 💬 Example: Updating a User
+
+```csharp
+// Controller action
+[HttpPut("{id:int}")]
+public async Task<IActionResult> Update(int id, [FromBody] UpdateUserRequest request)
+{
+    // Step 1: Create the command object
+    var command = new UpdateUserCommand(id, request.Username, request.Email, request.StartDate, request.StartTime);
+
+    // Step 2: Call the handler with the command
+    await updateHandler.HandleAsync(command);
+
+    // Step 3: Return the result
+    return NoContent();
+}
+```
+
+**Handler Implementation:**
+
+```csharp
+// filepath: DotnetCqrs/Features/Users/Handlers/Update.cs
+public class UpdateUserHandler(IUsersRepository repo) : IUpdateUserHandler
+{
+    public async Task HandleAsync(UpdateUserCommand command)
+    {
+        var user = await repo.GetSingleAsync(e => e.Id == command.Id);
+        if (user == null) throw new NotFoundEx();
+        user.Username = command.Username;
+        user.Email = command.Email;
+        user.StartDate = command.StartDate;
+        user.StartTime = command.StartTime;
+        repo.Update(user);
+        await repo.CommitAsync();
+    }
+}
+```
+
+---
+
+## 💬 Example: Deleting a User
+
+```csharp
+// Controller action
+[HttpDelete("{id:int}")]
+public async Task<IActionResult> Delete(int id)
+{
+    // Step 1: Call the handler with the id
+    await deleteHandler.HandleAsync(id);
+
+    // Step 2: Return the result
+    return NoContent();
+}
+```
+
+**Handler Implementation:**
+
+```csharp
+// filepath: DotnetCqrs/Features/Users/Handlers/Delete.cs
+public class DeleteUserHandler(IUsersRepository repo) : IDeleteUserHandler
+{
+    public async Task HandleAsync(int id)
+    {
+        var user = await repo.GetSingleAsync(e => e.Id == id);
+        if (user == null) throw new NotFoundEx();
+        repo.Remove(user);
+        await repo.CommitAsync();
+    }
+}
+```
 
 ---
 
