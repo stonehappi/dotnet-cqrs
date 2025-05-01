@@ -1,0 +1,17 @@
+﻿services:
+  dotnetcqrs:
+    image: dotnetcqrs
+    build:
+      context: .
+      dockerfile: DotnetCqrs/Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      - TZ=America/Los_Angeles
+      - DB_CONNECTION=Server=postgres:5432;Database=cqrs;User Id=postgres;Password=password;
+    networks:
+      - docker_postgres
+      
+networks:
+  docker_postgres:
+    external: true
